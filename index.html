@@ -197,6 +197,7 @@ const SEED_DATA = {
             id: 1,
             user_id: 1,
             email: 'admin@bugasan.ph',
+            username: 'admin',
             password: 'admin123',
             role_id: 1, // 1: Admin
             role_name: 'Admin',
@@ -212,6 +213,7 @@ const SEED_DATA = {
             id: 2,
             user_id: 2,
             email: 'manager@bugasan.ph',
+            username: 'manager',
             password: 'manager123',
             role_id: 2, // 2: Manager
             role_name: 'Manager',
@@ -227,6 +229,7 @@ const SEED_DATA = {
             id: 3,
             user_id: 3,
             email: 'cashier@bugasan.ph',
+            username: 'cashier',
             password: 'cashier123',
             role_id: 3, // 3: Cashier
             role_name: 'Cashier',
@@ -512,16 +515,41 @@ const SEED_DATA = {
     employees: [
         {
             id: 1,
+            name: 'Juan Dela Cruz',
+            role: 'Senior Cashier & Sales Specialist',
+            month: 'November',
+            year: '2025',
+            period: 'November 2025',
+            daily_rate: 1000.00,
+            days_worked: 30.0,
+            overtime_hours: 0.0,
+            gross_pay: 30000.00,
+            sss_deduction: 1200.00,
+            pagibig_deduction: 200.00,
+            philhealth_deduction: 400.00,
+            tax_deduction: 2000.00,
+            other_deductions: 0.00,
+            total_deductions: 3800.00,
+            net_pay: 26200.00,
+            status: 'Active',
+            created_at: '2025-11-30T10:00:00Z'
+        },
+        {
+            id: 2,
             name: 'Maria Santos',
             role: 'Store Administrator',
+            month: 'November',
+            year: '2026',
             daily_rate: 800.00,
             days_worked: 13.0,
             overtime_hours: 4.0,
             sss_deduction: 550.00,
             philhealth_deduction: 250.00,
             pagibig_deduction: 100.00,
+            tax_deduction: 0.00,
             other_deductions: 0.00,
             gross_pay: 10900.00,
+            total_deductions: 900.00,
             net_pay: 10000.00,
             period: 'Nov 1 - Nov 15, 2026',
             status: 'Active',
@@ -1169,8 +1197,14 @@ class BugasanStore {
     // ==========================================
     // AUTHENTICATION & PROFILE
     // ==========================================
-    login(email, password) {
-        const user = this.data.users.find(u => u.email.trim().toLowerCase() === email.trim().toLowerCase());
+    login(identifier, password) {
+        const term = (identifier || '').trim().toLowerCase();
+        const user = this.data.users.find(u => {
+            const email = (u.email || '').trim().toLowerCase();
+            const username = (u.username || '').trim().toLowerCase();
+            const prefix = email.split('@')[0];
+            return email === term || username === term || prefix === term;
+        });
         if (!user) {
             return { success: false, message: 'Invalid email or password' };
         }
@@ -1248,6 +1282,7 @@ class BugasanStore {
     // ==========================================
     addUser(payload) {
         const email = (payload.email || '').trim().toLowerCase();
+        const username = (payload.username || email.split('@')[0] || '').trim().toLowerCase();
         if (!email) return { success: false, message: 'Email is required.' };
         if (this.data.users.some(u => u.email.toLowerCase() === email)) {
             return { success: false, message: `User with email "${email}" already exists.` };
@@ -1262,6 +1297,7 @@ class BugasanStore {
             id: newId,
             user_id: newId,
             email: email,
+            username: username,
             password: payload.password || 'temp4321',
             role_id: roleId,
             role_name: roleName,
@@ -1322,6 +1358,19 @@ class BugasanStore {
         this.saveLocal();
         this.logAction('ACCOUNT_STATUS_TOGGLED', `Account for "${user.first_name} ${user.last_name}" status set to ${user.status}.`);
         return { success: true, user: user };
+    }
+
+    deleteUser(userId) {
+        const idx = this.data.users.findIndex(u => u.id === userId || u.user_id === userId);
+        if (idx === -1) return { success: false, message: 'User not found.' };
+        const user = this.data.users[idx];
+        if (this.currentUser && (this.currentUser.id === userId || this.currentUser.user_id === userId)) {
+            return { success: false, message: 'You cannot delete your own logged-in account.' };
+        }
+        this.data.users.splice(idx, 1);
+        this.saveLocal();
+        this.logAction('ACCOUNT_DELETED', `Deleted user account "${user.first_name} ${user.last_name}" (${user.email}).`);
+        return { success: true, message: `Account "${user.first_name} ${user.last_name}" deleted.` };
     }
 
     resetUserPassword(userId) {
@@ -1833,35 +1882,72 @@ class BugasanStore {
         return true;
     }
 
+    deleteSupplier(id) {
+        const idx = this.data.suppliers.findIndex(s => s.id === id);
+        if (idx === -1) return { success: false, message: 'Supplier not found.' };
+        const supplier = this.data.suppliers[idx];
+        this.data.suppliers.splice(idx, 1);
+        this.saveLocal();
+        this.logAction('SUPPLIER_DELETED', `Deleted supplier "${supplier.name}".`);
+        return { success: true, message: `Supplier "${supplier.name}" deleted.` };
+    }
+
     // ==========================================
     // HR & PAYROLL (Gross, Deductions, Net Pay)
     // ==========================================
-    calculatePayrollValues(dailyRate, daysWorked, overtimeHours, sss, philhealth, pagibig, other) {
-        const rate = parseFloat(dailyRate) || 0;
-        const days = parseFloat(daysWorked) || 0;
-        const otHours = parseFloat(overtimeHours) || 0;
+    calculatePayrollValues(dailyRate, daysWorked, overtimeHours, sss, philhealth, pagibig, tax = 0, other = 0, customGross = null) {
+        let grossPay = 0;
+        let basicPay = 0;
+        let overtimePay = 0;
 
-        const basicPay = rate * days;
-        const hourlyRate = rate / 8;
-        const overtimePay = (hourlyRate * 1.25) * otHours; // standard 125% OT rate
-        const grossPay = basicPay + overtimePay;
+        if (customGross !== null && customGross !== undefined && !isNaN(parseFloat(customGross)) && parseFloat(customGross) > 0) {
+            grossPay = parseFloat(customGross);
+            basicPay = grossPay;
+        } else {
+            const rate = parseFloat(dailyRate) || 0;
+            const days = parseFloat(daysWorked) || 0;
+            const otHours = parseFloat(overtimeHours) || 0;
+
+            basicPay = rate * days;
+            const hourlyRate = rate / 8;
+            overtimePay = (hourlyRate * 1.25) * otHours;
+            grossPay = basicPay + overtimePay;
+        }
 
         const sssDed = parseFloat(sss) || 0;
         const phDed = parseFloat(philhealth) || 0;
         const hdmfDed = parseFloat(pagibig) || 0;
+        const taxDed = parseFloat(tax) || 0;
         const otherDed = parseFloat(other) || 0;
 
-        const totalDeductions = sssDed + phDed + hdmfDed + otherDed;
+        const totalDeductions = sssDed + phDed + hdmfDed + taxDed + otherDed;
         const netPay = Math.max(0, grossPay - totalDeductions);
 
         return {
             basicPay: parseFloat(basicPay.toFixed(2)),
             overtimePay: parseFloat(overtimePay.toFixed(2)),
             grossPay: parseFloat(grossPay.toFixed(2)),
+            sssDeduction: parseFloat(sssDed.toFixed(2)),
+            philhealthDeduction: parseFloat(phDed.toFixed(2)),
+            pagibigDeduction: parseFloat(hdmfDed.toFixed(2)),
+            taxDeduction: parseFloat(taxDed.toFixed(2)),
+            otherDeductions: parseFloat(otherDed.toFixed(2)),
             totalDeductions: parseFloat(totalDeductions.toFixed(2)),
             netPay: parseFloat(netPay.toFixed(2))
         };
     }
+
+    deleteEmployee(id) {
+        const idx = this.data.employees.findIndex(e => e.id === id);
+        if (idx === -1) return { success: false, message: 'Employee not found.' };
+        const emp = this.data.employees[idx];
+        this.data.employees.splice(idx, 1);
+        this.saveLocal();
+        this.logAction('EMPLOYEE_DELETED', `Deleted employee payroll record for "${emp.name}".`);
+        return { success: true };
+    }
+
+    
 
     addOrUpdateEmployee(payload, id = null) {
         const calcs = this.calculatePayrollValues(
@@ -1871,48 +1957,62 @@ class BugasanStore {
             payload.sss_deduction,
             payload.philhealth_deduction,
             payload.pagibig_deduction,
-            payload.other_deductions
+            payload.tax_deduction || payload.tax || 0,
+            payload.other_deductions || 0,
+            payload.gross_pay
         );
+
+        const month = payload.month || "November";
+        const year = payload.year || "2025";
+        const period = payload.period || (month + " " + year);
 
         if (id) {
             const emp = this.data.employees.find(e => e.id === id);
-            if (!emp) return { success: false, message: 'Employee not found' };
+            if (!emp) return { success: false, message: "Employee not found" };
             emp.name = payload.name;
             emp.role = payload.role;
-            emp.daily_rate = parseFloat(payload.daily_rate);
-            emp.days_worked = parseFloat(payload.days_worked);
-            emp.overtime_hours = parseFloat(payload.overtime_hours);
-            emp.sss_deduction = parseFloat(payload.sss_deduction) || 0;
-            emp.philhealth_deduction = parseFloat(payload.philhealth_deduction) || 0;
-            emp.pagibig_deduction = parseFloat(payload.pagibig_deduction) || 0;
-            emp.other_deductions = parseFloat(payload.other_deductions) || 0;
+            emp.month = month;
+            emp.year = year;
+            emp.period = period;
+            emp.daily_rate = parseFloat(payload.daily_rate) || 0;
+            emp.days_worked = parseFloat(payload.days_worked) || 0;
+            emp.overtime_hours = parseFloat(payload.overtime_hours) || 0;
             emp.gross_pay = calcs.grossPay;
+            emp.sss_deduction = calcs.sssDeduction;
+            emp.philhealth_deduction = calcs.philhealthDeduction;
+            emp.pagibig_deduction = calcs.pagibigDeduction;
+            emp.tax_deduction = calcs.taxDeduction;
+            emp.other_deductions = calcs.otherDeductions;
+            emp.total_deductions = calcs.totalDeductions;
             emp.net_pay = calcs.netPay;
-            emp.period = payload.period || 'Current Cutoff';
             this.saveLocal();
-            this.logAction('PAYROLL_UPDATED', `Updated payroll calculation for ${emp.name}.`);
+            this.logAction("PAYROLL_UPDATED", "Updated payroll calculation for " + emp.name + " (" + period + ") - Net: ₱" + calcs.netPay.toFixed(2));
             return { success: true, employee: emp };
         } else {
             const newEmp = {
                 id: Date.now(),
                 name: payload.name,
                 role: payload.role,
-                daily_rate: parseFloat(payload.daily_rate),
-                days_worked: parseFloat(payload.days_worked),
-                overtime_hours: parseFloat(payload.overtime_hours),
-                sss_deduction: parseFloat(payload.sss_deduction) || 0,
-                philhealth_deduction: parseFloat(payload.philhealth_deduction) || 0,
-                pagibig_deduction: parseFloat(payload.pagibig_deduction) || 0,
-                other_deductions: parseFloat(payload.other_deductions) || 0,
+                month: month,
+                year: year,
+                period: period,
+                daily_rate: parseFloat(payload.daily_rate) || 0,
+                days_worked: parseFloat(payload.days_worked) || 0,
+                overtime_hours: parseFloat(payload.overtime_hours) || 0,
                 gross_pay: calcs.grossPay,
+                sss_deduction: calcs.sssDeduction,
+                philhealth_deduction: calcs.philhealthDeduction,
+                pagibig_deduction: calcs.pagibigDeduction,
+                tax_deduction: calcs.taxDeduction,
+                other_deductions: calcs.otherDeductions,
+                total_deductions: calcs.totalDeductions,
                 net_pay: calcs.netPay,
-                period: payload.period || 'Current Cutoff',
-                status: 'Active',
+                status: "Active",
                 created_at: new Date().toISOString()
             };
             this.data.employees.push(newEmp);
             this.saveLocal();
-            this.logAction('PAYROLL_RECORD_ADDED', `Processed payroll record for ${newEmp.name} (Net: ₱${calcs.netPay.toFixed(2)}).`);
+            this.logAction("PAYROLL_RECORD_ADDED", "Processed payroll record for " + newEmp.name + " (" + period + ") - Net: ₱" + calcs.netPay.toFixed(2));
             return { success: true, employee: newEmp };
         }
     }
@@ -1959,6 +2059,20 @@ class BugasanStore {
     // ==========================================
     // SYSTEM ALERTS COMPUTATION
     // ==========================================
+    getDashboardMetrics() {
+        const fin = this.getFinancialReport('today');
+        const allFin = this.getFinancialReport('all');
+        const alerts = this.getSystemAlerts();
+        return {
+            todaySales: fin.grossSales,
+            totalSales: allFin.grossSales,
+            totalProducts: this.data.products.length,
+            lowStockCount: alerts.lowStock.length,
+            totalAlerts: alerts.totalAlerts,
+            recentTransactions: this.data.transactions.slice(0, 5)
+        };
+    }
+
     getSystemAlerts() {
         const lowStock = [];
         const expiringSoon = [];
@@ -3140,6 +3254,10 @@ const INVENTORY_UI = {
                         <i class="fa-solid fa-plus"></i>
                         <span>Add Rice Variety</span>
                     </button>
+                    <button onclick="app.openGeneralRestockModal()" class="px-3.5 py-2 bg-teal-600 hover:bg-teal-700 text-white font-bold text-xs rounded-xl shadow transition flex items-center space-x-1.5">
+                        <i class="fa-solid fa-truck-ramp-box"></i>
+                        <span>Restock Product</span>
+                    </button>
                     <button onclick="app.showModal('alerts-modal')" class="px-3.5 py-2 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 font-bold text-xs rounded-xl transition flex items-center space-x-1.5">
                         <i class="fa-solid fa-triangle-exclamation text-amber-600"></i>
                         <span>Alerts</span>
@@ -3348,8 +3466,11 @@ const INVENTORY_UI = {
                                 <button onclick="app.toggleSupplierActive(${s.id})" class="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-[11px] transition">
                                     ${isActive ? 'Deactivate' : 'Activate'}
                                 </button>
-                                <button onclick="app.openEditSupplierModal(${s.id})" class="p-1 text-blue-600 hover:text-blue-800 transition">
+                                <button onclick="app.openEditSupplierModal(${s.id})" class="p-1 text-blue-600 hover:text-blue-800 transition" title="Edit Supplier">
                                     <i class="fa-solid fa-pen-to-square"></i>
+                                </button>
+                                <button onclick="app.deleteSupplier(${s.id})" class="p-1 text-red-500 hover:text-red-700 transition" title="Delete Supplier">
+                                    <i class="fa-solid fa-trash-can"></i>
                                 </button>
                             </div>
                         </div>
@@ -3919,14 +4040,13 @@ const ADMIN_REPORTS_UI = {
                         <tr>
                             <th class="px-4 py-3">Employee Name</th>
                             <th class="px-4 py-3">Position</th>
-                            <th class="px-4 py-3 text-right">Daily Rate</th>
-                            <th class="px-4 py-3 text-center">Days</th>
-                            <th class="px-4 py-3 text-center">OT (Hrs)</th>
+                            <th class="px-4 py-3">Period</th>
                             <th class="px-4 py-3 text-right">Gross Pay</th>
                             <th class="px-4 py-3 text-right">SSS</th>
                             <th class="px-4 py-3 text-right">PhilHealth</th>
                             <th class="px-4 py-3 text-right">Pag-IBIG</th>
-                            <th class="px-4 py-3 text-right">Other</th>
+                            <th class="px-4 py-3 text-right">Withholding Tax</th>
+                            <th class="px-4 py-3 text-right text-amber-700">Total Deductions</th>
                             <th class="px-4 py-3 text-right font-black">Net Pay</th>
                             <th class="px-4 py-3 text-center">Actions</th>
                         </tr>
@@ -3936,14 +4056,13 @@ const ADMIN_REPORTS_UI = {
                         <tr class="hover:bg-slate-50/80 transition">
                             <td class="px-4 py-3 font-bold text-slate-900">${e.name}</td>
                             <td class="px-4 py-3 text-slate-600">${e.role}</td>
-                            <td class="px-4 py-3 text-right">₱${e.daily_rate.toFixed(2)}</td>
-                            <td class="px-4 py-3 text-center font-bold">${e.days_worked}</td>
-                            <td class="px-4 py-3 text-center font-bold text-teal-700">${e.overtime_hours}</td>
+                            <td class="px-4 py-3 text-slate-700 font-semibold">${e.period || ((e.month || 'November') + ' ' + (e.year || '2025'))}</td>
                             <td class="px-4 py-3 text-right font-bold text-slate-900">₱${e.gross_pay.toFixed(2)}</td>
-                            <td class="px-4 py-3 text-right text-slate-500">₱${e.sss_deduction.toFixed(2)}</td>
-                            <td class="px-4 py-3 text-right text-slate-500">₱${e.philhealth_deduction.toFixed(2)}</td>
-                            <td class="px-4 py-3 text-right text-slate-500">₱${e.pagibig_deduction.toFixed(2)}</td>
-                            <td class="px-4 py-3 text-right text-slate-500">₱${(e.other_deductions || 0).toFixed(2)}</td>
+                            <td class="px-4 py-3 text-right text-slate-500">₱${(e.sss_deduction || 0).toFixed(2)}</td>
+                            <td class="px-4 py-3 text-right text-slate-500">₱${(e.philhealth_deduction || 0).toFixed(2)}</td>
+                            <td class="px-4 py-3 text-right text-slate-500">₱${(e.pagibig_deduction || 0).toFixed(2)}</td>
+                            <td class="px-4 py-3 text-right text-slate-500">₱${(e.tax_deduction || 0).toFixed(2)}</td>
+                            <td class="px-4 py-3 text-right font-bold text-amber-700">₱${(e.total_deductions || ((e.sss_deduction || 0) + (e.philhealth_deduction || 0) + (e.pagibig_deduction || 0) + (e.tax_deduction || 0) + (e.other_deductions || 0))).toFixed(2)}</td>
                             <td class="px-4 py-3 text-right font-black text-emerald-700 text-sm">₱${e.net_pay.toFixed(2)}</td>
                             <td class="px-4 py-3 text-center">
                                 <div class="flex items-center justify-center space-x-1">
@@ -3952,6 +4071,9 @@ const ADMIN_REPORTS_UI = {
                                     </button>
                                     <button onclick="app.openEditEmployeeModal(${e.id})" class="p-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 transition" title="Edit Payroll Record">
                                         <i class="fa-solid fa-pen-to-square"></i>
+                                    </button>
+                                    <button onclick="app.deleteEmployee(${e.id})" class="p-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-600 transition" title="Delete Payroll Record">
+                                        <i class="fa-solid fa-trash"></i>
                                     </button>
                                 </div>
                             </td>
@@ -4212,14 +4334,55 @@ const ADMIN_REPORTS_UI = {
             </div>` : ''}
 
             <!-- SUB-TAB 4: SALARY & PAYROLL DISBURSEMENT REPORT -->
-            ${subTab === 'salary' ? `
+            ${subTab === 'salary' ? (() => {
+                const salFilter = (typeof app !== 'undefined' && app.salaryReportFilter) ? app.salaryReportFilter : { month: 'all', year: 'all', search: '' };
+                const filteredEmps = employees.filter(e => {
+                    const m = e.month || 'November';
+                    const y = String(e.year || '2025');
+                    const n = (e.name || '').toLowerCase();
+                    if (salFilter.month !== 'all' && m.toLowerCase() !== salFilter.month.toLowerCase()) return false;
+                    if (salFilter.year !== 'all' && y !== String(salFilter.year)) return false;
+                    if (salFilter.search && !n.includes(salFilter.search.toLowerCase())) return false;
+                    return true;
+                });
+
+                return `
             <div class="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm space-y-4">
                 <div class="flex items-center justify-between pb-3 border-b">
                     <div>
                         <h3 class="font-extrabold text-slate-900 text-sm">HR & Payroll Disbursement Summary</h3>
-                        <p class="text-[11px] text-slate-500">Statutory deductions (SSS, PhilHealth, Pag-IBIG) and take-home pay</p>
+                        <p class="text-[11px] text-slate-500">Statutory deductions (SSS, PhilHealth, Pag-IBIG, Withholding Tax) and take-home pay</p>
                     </div>
-                    <span class="text-xs font-bold text-slate-500">${employees.length} Personnel</span>
+                    <span class="text-xs font-bold text-slate-500">${filteredEmps.length} Personnel Listed</span>
+                </div>
+
+                <!-- Month, Year & Employee Filters -->
+                <div class="grid grid-cols-1 sm:grid-cols-4 gap-3 p-3.5 bg-slate-50 rounded-xl border border-slate-200">
+                    <div>
+                        <label class="block text-[10px] font-bold text-slate-500 uppercase mb-1">Filter Month</label>
+                        <select onchange="app.filterSalaryMonth(this.value)" class="w-full p-2 border border-slate-200 rounded-lg text-xs bg-white font-bold text-slate-800">
+                            <option value="all" ${salFilter.month === 'all' ? 'selected' : ''}>All Months</option>
+                            ${['January','February','March','April','May','June','July','August','September','October','November','December'].map(mo => `<option value="${mo}" ${salFilter.month === mo ? 'selected' : ''}>${mo}</option>`).join('')}
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-[10px] font-bold text-slate-500 uppercase mb-1">Filter Year</label>
+                        <select onchange="app.filterSalaryYear(this.value)" class="w-full p-2 border border-slate-200 rounded-lg text-xs bg-white font-bold text-slate-800">
+                            <option value="all" ${salFilter.year === 'all' ? 'selected' : ''}>All Years</option>
+                            ${['2024','2025','2026'].map(yr => `<option value="${yr}" ${salFilter.year === yr ? 'selected' : ''}>${yr}</option>`).join('')}
+                        </select>
+                    </div>
+                    <div class="sm:col-span-2">
+                        <label class="block text-[10px] font-bold text-slate-500 uppercase mb-1">Search Employee / Cashier</label>
+                        <div class="relative">
+                            <span class="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400">
+                                <i class="fa-solid fa-magnifying-glass"></i>
+                            </span>
+                            <input type="text" value="${salFilter.search || ''}" placeholder="Filter by employee name (e.g. Juan Dela Cruz)..."
+                                   oninput="app.filterSalarySearch(this.value)"
+                                   class="w-full pl-9 pr-3 py-2 bg-white border border-slate-200 rounded-lg text-xs focus:ring-1 focus:ring-emerald-500">
+                        </div>
+                    </div>
                 </div>
 
                 <div class="overflow-x-auto">
@@ -4228,25 +4391,31 @@ const ADMIN_REPORTS_UI = {
                             <tr>
                                 <th class="p-2.5">Employee Name</th>
                                 <th class="p-2.5">Role</th>
-                                <th class="p-2.5 text-right">Daily Rate</th>
-                                <th class="p-2.5 text-center">Days</th>
-                                <th class="p-2.5 text-center">OT Hrs</th>
+                                <th class="p-2.5">Period</th>
                                 <th class="p-2.5 text-right">Gross Pay</th>
-                                <th class="p-2.5 text-right">Total Deductions</th>
+                                <th class="p-2.5 text-right">SSS</th>
+                                <th class="p-2.5 text-right">PhilHealth</th>
+                                <th class="p-2.5 text-right">Pag-IBIG</th>
+                                <th class="p-2.5 text-right">Withholding Tax</th>
+                                <th class="p-2.5 text-right font-bold text-amber-700">Total Deductions</th>
                                 <th class="p-2.5 text-right font-black">Net Pay</th>
                                 <th class="p-2.5 text-center">Actions</th>
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-slate-100">
-                            ${employees.map(e => `
+                            ${filteredEmps.length === 0 ? `
+                            <tr><td colspan="11" class="p-6 text-center text-slate-400 italic">No employee records match the selected month/year/search filters.</td></tr>
+                            ` : filteredEmps.map(e => `
                             <tr>
                                 <td class="p-2.5 font-bold text-slate-900">${e.name}</td>
                                 <td class="p-2.5 text-slate-600">${e.role}</td>
-                                <td class="p-2.5 text-right">₱${e.daily_rate.toFixed(2)}</td>
-                                <td class="p-2.5 text-center font-bold">${e.days_worked}</td>
-                                <td class="p-2.5 text-center font-bold text-teal-700">${e.overtime_hours}</td>
+                                <td class="p-2.5 font-semibold text-slate-700">${e.period || ((e.month || 'November') + ' ' + (e.year || '2025'))}</td>
                                 <td class="p-2.5 text-right font-bold text-slate-900">₱${e.gross_pay.toFixed(2)}</td>
-                                <td class="p-2.5 text-right text-amber-700">-₱${(e.sss_deduction + e.philhealth_deduction + e.pagibig_deduction + (e.other_deductions||0)).toFixed(2)}</td>
+                                <td class="p-2.5 text-right text-slate-600">₱${(e.sss_deduction || 0).toFixed(2)}</td>
+                                <td class="p-2.5 text-right text-slate-600">₱${(e.philhealth_deduction || 0).toFixed(2)}</td>
+                                <td class="p-2.5 text-right text-slate-600">₱${(e.pagibig_deduction || 0).toFixed(2)}</td>
+                                <td class="p-2.5 text-right text-slate-600">₱${(e.tax_deduction || 0).toFixed(2)}</td>
+                                <td class="p-2.5 text-right font-bold text-amber-700">-₱${(e.total_deductions || ((e.sss_deduction || 0) + (e.philhealth_deduction || 0) + (e.pagibig_deduction || 0) + (e.tax_deduction || 0) + (e.other_deductions || 0))).toFixed(2)}</td>
                                 <td class="p-2.5 text-right font-black text-emerald-700">₱${e.net_pay.toFixed(2)}</td>
                                 <td class="p-2.5 text-center">
                                     <div class="flex items-center justify-center space-x-1">
@@ -4258,7 +4427,8 @@ const ADMIN_REPORTS_UI = {
                         </tbody>
                     </table>
                 </div>
-            </div>` : ''}
+            </div>`;
+            })() : ''}
 
             <!-- SUB-TAB 5: RICE SPOILAGE & LOSSES REPORT -->
             ${subTab === 'losses' ? `
@@ -4432,8 +4602,11 @@ const ADMIN_REPORTS_UI = {
                                         <button onclick="app.resetUserPassword(${u.id || u.user_id})" class="p-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-700 transition" title="Reset Password to temp4321">
                                             <i class="fa-solid fa-key"></i>
                                         </button>
-                                        <button onclick="app.toggleUserStatus(${u.id || u.user_id})" class="px-2 py-1 rounded text-[10px] font-bold ${isActive ? 'bg-slate-100 hover:bg-red-50 text-red-600' : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700'} transition">
+                                        <button onclick="app.toggleUserStatus(${u.id || u.user_id})" class="px-2 py-1 rounded text-[10px] font-bold ${isActive ? 'bg-slate-100 hover:bg-amber-50 text-amber-600' : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700'} transition">
                                             ${isActive ? 'Deactivate' : 'Activate'}
+                                        </button>
+                                        <button onclick="app.deleteUser(${u.id || u.user_id})" class="p-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-600 transition" title="Delete User Account">
+                                            <i class="fa-solid fa-trash-can"></i>
                                         </button>
                                     </div>
                                 </td>
@@ -4636,7 +4809,7 @@ if (typeof module !== 'undefined') {
 }
 
 
-
+// Master Controller and Dynamic Modals for Bugasan POS & Computer Accounting System
 // Initialize Store and Application State
 const store = new BugasanStore();
 
@@ -5228,6 +5401,80 @@ const app = {
         display.textContent = `₱${(qty * cost).toFixed(2)}`;
     },
 
+    openGeneralRestockModal() {
+        const products = store.data.products;
+        const suppliers = store.data.suppliers;
+        let prodOptions = '<option value="">-- Choose Product to Restock --</option>';
+        products.forEach(p => {
+            prodOptions += '<option value="' + p.id + '">' + p.name + ' (Current Stock: ' + p.stock_quantity + ' ' + p.unit + ')</option>';
+        });
+        let suppOptions = '<option value="">Default Supplier</option>';
+        suppliers.forEach(s => {
+            suppOptions += '<option value="' + s.id + '">' + s.name + '</option>';
+        });
+
+        const html = '<div id="general-restock-modal" class="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4">' +
+            '<div class="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 animate-fade-in border border-slate-100">' +
+                '<div class="flex items-center justify-between pb-3 border-b mb-4">' +
+                    '<h3 class="text-base font-black text-slate-900">Restock Product Inventory</h3>' +
+                    '<button onclick="app.closeModal(\'general-restock-modal\')" class="text-slate-400 hover:text-slate-600"><i class="fa-solid fa-xmark"></i></button>' +
+                '</div>' +
+                '<form onsubmit="app.handleGeneralRestockSubmit(event)" class="space-y-3.5 text-xs">' +
+                    '<div>' +
+                        '<label class="block font-bold text-slate-700 mb-1">Pick Product / Rice Variety *</label>' +
+                        '<select name="product_id" id="general-restock-prod-id" required class="w-full p-2 border rounded-lg font-bold">' +
+                            prodOptions +
+                        '</select>' +
+                    '</div>' +
+                    '<div class="grid grid-cols-2 gap-3">' +
+                        '<div>' +
+                            '<label class="block font-bold text-slate-700 mb-1">Quantity to Add *</label>' +
+                            '<input type="number" step="any" name="quantity" required placeholder="e.g. 50" class="w-full p-2 border rounded-lg font-bold">' +
+                        '</div>' +
+                        '<div>' +
+                            '<label class="block font-bold text-slate-700 mb-1">Supplier</label>' +
+                            '<select name="supplier_id" class="w-full p-2 border rounded-lg">' +
+                                suppOptions +
+                            '</select>' +
+                        '</div>' +
+                    '</div>' +
+                    '<div>' +
+                        '<label class="block font-bold text-slate-700 mb-1">Notes / Delivery Receipt #</label>' +
+                        '<input type="text" name="notes" placeholder="e.g. DR-2026-991 Delivery" class="w-full p-2 border rounded-lg">' +
+                    '</div>' +
+                    '<div class="pt-3 border-t flex space-x-2">' +
+                        '<button type="button" onclick="app.closeModal(\'general-restock-modal\')" class="w-1/3 py-2 bg-slate-100 font-bold rounded-lg">Cancel</button>' +
+                        '<button type="submit" class="w-2/3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg shadow">Increase Stock</button>' +
+                    '</div>' +
+                '</form>' +
+            '</div>' +
+        '</div>';
+
+        const container = document.getElementById('modal-container');
+        if (container) container.innerHTML = html;
+    },
+
+    handleGeneralRestockSubmit(e) {
+        e.preventDefault();
+        const f = e.target;
+        const prodId = parseInt(f.product_id.value);
+        const qty = parseFloat(f.quantity.value) || 0;
+        const suppId = f.supplier_id.value ? parseInt(f.supplier_id.value) : null;
+        const notes = f.notes.value || 'Manual restock via form';
+
+        const prod = store.data.products.find(p => p.id === prodId);
+        const unitCost = prod ? prod.cost_price : 0;
+
+        const res = store.restockProduct(prodId, qty, suppId, unitCost, notes);
+        if (!res.success) {
+            alert(res.message);
+            return;
+        }
+        this.closeModal('general-restock-modal');
+        this.renderApp();
+        this.showToast("Successfully added " + qty + " to " + (prod ? prod.name : "product") + " stock!", "success");
+    },
+
     handleRestockSubmit(e, productId) {
         e.preventDefault();
         const qty = document.getElementById('restock-qty').value;
@@ -5354,6 +5601,18 @@ const app = {
     },
 
     // 5. SUPPLIERS
+    deleteSupplier(id) {
+        if (confirm('Are you sure you want to delete this supplier? This action cannot be undone.')) {
+            const res = store.deleteSupplier(id);
+            if (!res.success) {
+                alert(res.message);
+                return;
+            }
+            this.renderApp();
+            this.showToast('Supplier deleted successfully.', 'info');
+        }
+    },
+
     toggleSupplierActive(id) {
         store.toggleSupplierStatus(id);
         this.renderApp();
@@ -5498,13 +5757,16 @@ const app = {
 
         const html = `
         <div id="edit-employee-modal" class="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4">
-            <div class="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-6 animate-fade-in border border-slate-100 max-h-[90vh] overflow-y-auto">
+            <div class="bg-white rounded-2xl shadow-2xl max-w-xl w-full p-6 animate-fade-in border border-slate-100 max-h-[92vh] overflow-y-auto">
                 <div class="flex items-center justify-between pb-3 border-b mb-4">
-                    <h3 class="text-base font-black text-slate-900">Edit Employee Payroll: ${emp.name}</h3>
+                    <div>
+                        <h3 class="text-base font-black text-slate-900">Edit Employee Payroll: ${emp.name}</h3>
+                        <p class="text-[11px] text-slate-500">Update salary, period, and statutory deductions</p>
+                    </div>
                     <button onclick="app.closeModal('edit-employee-modal')" class="text-slate-400 hover:text-slate-600"><i class="fa-solid fa-xmark"></i></button>
                 </div>
-                <form id="edit-payroll-form" onsubmit="app.handleEditPayrollSubmit(event, ${emp.id})" oninput="app.recalcPayrollModal(this)" class="space-y-3 text-xs">
-                    <div class="grid grid-cols-2 gap-3">
+                <form id="edit-payroll-form" onsubmit="app.handleEditPayrollSubmit(event, ${emp.id})" oninput="app.recalcPayrollModal(this)" class="space-y-3.5 text-xs">
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <div>
                             <label class="block font-bold text-slate-700 mb-1">Employee Name *</label>
                             <input type="text" name="name" required value="${emp.name}" class="w-full p-2 border rounded-lg font-bold">
@@ -5514,48 +5776,73 @@ const app = {
                             <input type="text" name="role" required value="${emp.role}" class="w-full p-2 border rounded-lg">
                         </div>
                     </div>
-                    <div class="grid grid-cols-3 gap-3">
+                    <div class="grid grid-cols-2 gap-3">
                         <div>
-                            <label class="block font-bold text-slate-700 mb-1">Daily Rate (₱) *</label>
-                            <input type="number" step="any" name="daily_rate" required value="${emp.daily_rate}" class="w-full p-2 border rounded-lg font-bold">
-                        </div>
-                        <div>
-                            <label class="block font-bold text-slate-700 mb-1">Days Worked *</label>
-                            <input type="number" step="any" name="days_worked" required value="${emp.days_worked}" class="w-full p-2 border rounded-lg font-bold">
+                            <label class="block font-bold text-slate-700 mb-1">Payroll Month *</label>
+                            <select name="month" class="w-full p-2 border rounded-lg font-bold text-slate-800">
+                                ${['January','February','March','April','May','June','July','August','September','October','November','December'].map(m => '<option value="' + m + '" ' + ((emp.month || 'November') === m ? 'selected' : '') + '>' + m + '</option>').join('')}
+                            </select>
                         </div>
                         <div>
-                            <label class="block font-bold text-slate-700 mb-1">Overtime (Hrs)</label>
-                            <input type="number" step="any" name="overtime_hours" value="${emp.overtime_hours}" class="w-full p-2 border rounded-lg">
+                            <label class="block font-bold text-slate-700 mb-1">Payroll Year *</label>
+                            <select name="year" class="w-full p-2 border rounded-lg font-bold text-slate-800">
+                                <option value="2024" ${String(emp.year) === '2024' ? 'selected' : ''}>2024</option>
+                                <option value="2025" ${String(emp.year || '2025') === '2025' ? 'selected' : ''}>2025</option>
+                                <option value="2026" ${String(emp.year) === '2026' ? 'selected' : ''}>2026</option>
+                            </select>
                         </div>
                     </div>
-                    <div class="p-2.5 bg-slate-100 rounded-lg flex justify-between font-bold text-slate-800">
-                        <span>Calculated Gross Pay:</span>
-                        <span id="payroll-gross-display" class="text-emerald-700">₱${emp.gross_pay.toFixed(2)}</span>
-                    </div>
-                    <div class="p-3 bg-amber-50/70 border border-amber-200 rounded-xl space-y-2">
-                        <span class="font-bold text-amber-900 block text-[11px] uppercase">Statutory Deductions (SSS, PhilHealth, Pag-IBIG)</span>
-                        <div class="grid grid-cols-4 gap-2">
-                            <div>
-                                <label class="block text-[10px] font-bold text-slate-600 mb-0.5">SSS (₱)</label>
-                                <input type="number" step="any" name="sss_deduction" value="${emp.sss_deduction}" class="w-full p-1.5 border rounded bg-white">
+                    <div class="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-2.5">
+                        <div class="grid grid-cols-1 sm:grid-cols-4 gap-2.5">
+                            <div class="sm:col-span-2">
+                                <label class="block text-[10px] font-bold text-slate-600 mb-0.5">Gross Pay (₱) *</label>
+                                <input type="number" step="any" name="gross_pay" value="${emp.gross_pay}" class="w-full p-2 border rounded-lg font-bold text-emerald-800 bg-white">
                             </div>
                             <div>
-                                <label class="block text-[10px] font-bold text-slate-600 mb-0.5">PhilHealth (₱)</label>
-                                <input type="number" step="any" name="philhealth_deduction" value="${emp.philhealth_deduction}" class="w-full p-1.5 border rounded bg-white">
+                                <label class="block text-[10px] font-bold text-slate-600 mb-0.5">Daily Rate (₱)</label>
+                                <input type="number" step="any" name="daily_rate" value="${emp.daily_rate}" class="w-full p-2 border rounded-lg bg-white">
                             </div>
                             <div>
-                                <label class="block text-[10px] font-bold text-slate-600 mb-0.5">Pag-IBIG (₱)</label>
-                                <input type="number" step="any" name="pagibig_deduction" value="${emp.pagibig_deduction}" class="w-full p-1.5 border rounded bg-white">
-                            </div>
-                            <div>
-                                <label class="block text-[10px] font-bold text-slate-600 mb-0.5">Other (₱)</label>
-                                <input type="number" step="any" name="other_deductions" value="${emp.other_deductions || 0}" class="w-full p-1.5 border rounded bg-white">
+                                <label class="block text-[10px] font-bold text-slate-600 mb-0.5">Days Worked</label>
+                                <input type="number" step="any" name="days_worked" value="${emp.days_worked}" class="w-full p-2 border rounded-lg bg-white">
                             </div>
                         </div>
+                        <div class="p-2 bg-white rounded-lg border flex justify-between font-bold text-slate-800">
+                            <span>Calculated Gross Pay:</span>
+                            <span id="payroll-gross-display" class="text-emerald-700 font-black text-sm">₱${emp.gross_pay.toFixed(2)}</span>
+                        </div>
                     </div>
-                    <div class="p-3 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center justify-between">
+                    <div class="p-3 bg-amber-50/80 border border-amber-200 rounded-xl space-y-2">
+                        <span class="font-bold text-amber-900 block text-[11px] uppercase">Deductions (SSS, Pag-IBIG, PhilHealth, Tax)</span>
+                        <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                            <div>
+                                <label class="block text-[10px] font-bold text-slate-700 mb-0.5">SSS (₱)</label>
+                                <input type="number" step="any" name="sss_deduction" value="${emp.sss_deduction || 0}" class="w-full p-1.5 border rounded bg-white">
+                            </div>
+                            <div>
+                                <label class="block text-[10px] font-bold text-slate-700 mb-0.5">Pag-IBIG (₱)</label>
+                                <input type="number" step="any" name="pagibig_deduction" value="${emp.pagibig_deduction || 0}" class="w-full p-1.5 border rounded bg-white">
+                            </div>
+                            <div>
+                                <label class="block text-[10px] font-bold text-slate-700 mb-0.5">PhilHealth (₱)</label>
+                                <input type="number" step="any" name="philhealth_deduction" value="${emp.philhealth_deduction || 0}" class="w-full p-1.5 border rounded bg-white">
+                            </div>
+                            <div>
+                                <label class="block text-[10px] font-bold text-slate-700 mb-0.5">Withholding Tax (₱)</label>
+                                <input type="number" step="any" name="tax_deduction" value="${emp.tax_deduction || 0}" class="w-full p-1.5 border rounded bg-white font-bold">
+                            </div>
+                        </div>
+                        <input type="hidden" name="overtime_hours" value="${emp.overtime_hours || 0}">
+                        <input type="hidden" name="other_deductions" value="${emp.other_deductions || 0}">
+
+                        <div class="p-2 bg-white rounded-lg border border-amber-200 flex justify-between font-bold text-amber-900">
+                            <span>Total Deductions:</span>
+                            <span id="payroll-deductions-display" class="font-black text-amber-700 text-sm">₱${(emp.total_deductions || ((emp.sss_deduction||0) + (emp.philhealth_deduction||0) + (emp.pagibig_deduction||0) + (emp.tax_deduction||0))).toFixed(2)}</span>
+                        </div>
+                    </div>
+                    <div class="p-3 bg-emerald-50 border border-emerald-300 rounded-xl flex items-center justify-between">
                         <span class="font-bold text-emerald-900">Total Net Take-Home Pay:</span>
-                        <span id="payroll-net-display" class="font-black text-emerald-700 text-lg">₱${emp.net_pay.toFixed(2)}</span>
+                        <span id="payroll-net-display" class="font-black text-emerald-700 text-xl">₱${emp.net_pay.toFixed(2)}</span>
                     </div>
                     <div class="pt-3 border-t flex space-x-2">
                         <button type="button" onclick="app.closeModal('edit-employee-modal')" class="w-1/3 py-2 bg-slate-100 font-bold rounded-lg">Cancel</button>
@@ -5575,13 +5862,17 @@ const app = {
         const payload = {
             name: f.name.value,
             role: f.role.value,
-            daily_rate: f.daily_rate.value,
-            days_worked: f.days_worked.value,
-            overtime_hours: f.overtime_hours.value,
-            sss_deduction: f.sss_deduction.value,
-            philhealth_deduction: f.philhealth_deduction.value,
-            pagibig_deduction: f.pagibig_deduction.value,
-            other_deductions: f.other_deductions.value
+            month: f.month ? f.month.value : 'November',
+            year: f.year ? f.year.value : '2025',
+            gross_pay: f.gross_pay ? f.gross_pay.value : 0,
+            daily_rate: f.daily_rate ? f.daily_rate.value : 0,
+            days_worked: f.days_worked ? f.days_worked.value : 0,
+            overtime_hours: f.overtime_hours ? f.overtime_hours.value : 0,
+            sss_deduction: f.sss_deduction ? f.sss_deduction.value : 0,
+            philhealth_deduction: f.philhealth_deduction ? f.philhealth_deduction.value : 0,
+            pagibig_deduction: f.pagibig_deduction ? f.pagibig_deduction.value : 0,
+            tax_deduction: f.tax_deduction ? f.tax_deduction.value : 0,
+            other_deductions: f.other_deductions ? f.other_deductions.value : 0
         };
         store.addOrUpdateEmployee(payload, empId);
         this.closeModal('edit-employee-modal');
@@ -6125,6 +6416,10 @@ const app = {
                         <label class="block font-bold text-slate-700 mb-1">Address</label>
                         <input type="text" name="address" value="${u.address || ''}" class="w-full p-2 border rounded-lg">
                     </div>
+                    <div>
+                        <label class="block font-bold text-slate-700 mb-1">New Password (leave blank to keep current)</label>
+                        <input type="password" name="edit_user_new_password" placeholder="Enter new password if updating" class="w-full p-2 border rounded-lg">
+                    </div>
                     <div class="pt-3 border-t flex space-x-2">
                         <button type="button" onclick="app.closeModal('edit-user-modal')" class="w-1/3 py-2 bg-slate-100 font-bold rounded-lg">Cancel</button>
                         <button type="submit" class="w-2/3 py-2 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-lg shadow">Save Account</button>
@@ -6148,6 +6443,9 @@ const app = {
             phone_number: f.phone_number.value,
             address: f.address.value
         };
+        if (f.edit_user_new_password && f.edit_user_new_password.value.trim()) {
+            payload.password = f.edit_user_new_password.value.trim();
+        }
         const res = store.editUser(userId, payload);
         if (!res.success) {
             alert(res.message);
@@ -6156,6 +6454,48 @@ const app = {
         this.closeModal('edit-user-modal');
         this.renderApp();
         this.showToast('User account updated successfully!', 'success');
+    },
+
+    deleteUser(userId) {
+        if (confirm('Are you sure you want to permanently delete this user account? This cannot be undone.')) {
+            const res = store.deleteUser(userId);
+            if (!res.success) {
+                alert(res.message);
+                return;
+            }
+            this.renderApp();
+            this.showToast('User account deleted permanently.', 'info');
+        }
+    },
+
+    deleteEmployee(id) {
+        if (confirm('Are you sure you want to delete this employee payroll record?')) {
+            const res = store.deleteEmployee(id);
+            if (!res.success) {
+                alert(res.message);
+                return;
+            }
+            this.renderApp();
+            this.showToast('Employee payroll record deleted.', 'info');
+        }
+    },
+
+    filterSalaryMonth(month) {
+        if (!this.salaryReportFilter) this.salaryReportFilter = { month: 'all', year: 'all', search: '' };
+        this.salaryReportFilter.month = month;
+        this.renderApp();
+    },
+
+    filterSalaryYear(year) {
+        if (!this.salaryReportFilter) this.salaryReportFilter = { month: 'all', year: 'all', search: '' };
+        this.salaryReportFilter.year = year;
+        this.renderApp();
+    },
+
+    filterSalarySearch(q) {
+        if (!this.salaryReportFilter) this.salaryReportFilter = { month: 'all', year: 'all', search: '' };
+        this.salaryReportFilter.search = q;
+        this.renderApp();
     },
 
     toggleUserStatus(userId) {
@@ -6181,72 +6521,127 @@ const app = {
     },
 
     openPayrollCalcModal() {
+        const users = store.data.users;
         const html = `
         <div id="payroll-calc-modal" class="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4">
-            <div class="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-6 animate-fade-in border border-slate-100 max-h-[90vh] overflow-y-auto">
+            <div class="bg-white rounded-2xl shadow-2xl max-w-xl w-full p-6 animate-fade-in border border-slate-100 max-h-[92vh] overflow-y-auto">
                 <div class="flex items-center justify-between pb-3 border-b mb-4">
-                    <h3 class="text-base font-black text-slate-900">Run Employee Payroll & Salary Calculation</h3>
+                    <div>
+                        <h3 class="text-base font-black text-slate-900">Run Employee Payroll & Salary Calculation</h3>
+                        <p class="text-[11px] text-slate-500">Gross pay, statutory deductions (SSS, Pag-IBIG, PhilHealth, Tax), and net pay</p>
+                    </div>
                     <button onclick="app.closeModal('payroll-calc-modal')" class="text-slate-400 hover:text-slate-600"><i class="fa-solid fa-xmark"></i></button>
                 </div>
-                <form id="payroll-form" onsubmit="app.handlePayrollSubmit(event)" oninput="app.recalcPayrollModal(this)" class="space-y-3 text-xs">
-                    <div class="grid grid-cols-2 gap-3">
+
+                <!-- Sample Preset Quick-Fill Button -->
+                <div class="mb-3 p-2.5 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center justify-between">
+                    <div>
+                        <span class="font-bold text-emerald-900 text-xs">Sample Case (Juan Dela Cruz - Nov 2025):</span>
+                        <div class="text-[10px] text-emerald-700">Gross: ₱30,000 | SSS: ₱1,200 | Pag-IBIG: ₱200 | PhilHealth: ₱400 | Tax: ₱2,000 | Net: ₱26,200</div>
+                    </div>
+                    <button type="button" onclick="app.fillJuanDelaCruzPayroll()" class="px-2.5 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white font-bold rounded-lg text-xs shadow transition">
+                        Load Sample
+                    </button>
+                </div>
+
+                <form id="payroll-form" onsubmit="app.handlePayrollSubmit(event)" oninput="app.recalcPayrollModal(this)" class="space-y-3.5 text-xs">
+                    <!-- Employee & Role -->
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <div>
-                            <label class="block font-bold text-slate-700 mb-1">Employee Full Name *</label>
-                            <input type="text" name="name" required placeholder="e.g. Danilo Ramos" class="w-full p-2 border rounded-lg font-bold">
+                            <label class="block font-bold text-slate-700 mb-1">Employee / Cashier Name *</label>
+                            <input type="text" id="payroll-emp-name" name="name" required value="Juan Dela Cruz" placeholder="e.g. Juan Dela Cruz" class="w-full p-2 border rounded-lg font-bold">
                         </div>
                         <div>
                             <label class="block font-bold text-slate-700 mb-1">Position / Role *</label>
-                            <input type="text" name="role" required placeholder="Warehouse Bag Handler" class="w-full p-2 border rounded-lg">
-                        </div>
-                    </div>
-                    <div class="grid grid-cols-3 gap-3">
-                        <div>
-                            <label class="block font-bold text-slate-700 mb-1">Daily Rate (₱) *</label>
-                            <input type="number" step="any" name="daily_rate" required value="550" class="w-full p-2 border rounded-lg font-bold">
-                        </div>
-                        <div>
-                            <label class="block font-bold text-slate-700 mb-1">Days Worked *</label>
-                            <input type="number" step="any" name="days_worked" required value="12" class="w-full p-2 border rounded-lg font-bold">
-                        </div>
-                        <div>
-                            <label class="block font-bold text-slate-700 mb-1">Overtime (Hrs)</label>
-                            <input type="number" step="any" name="overtime_hours" value="4" class="w-full p-2 border rounded-lg">
+                            <input type="text" id="payroll-emp-role" name="role" required value="Senior Cashier & Sales Specialist" placeholder="e.g. Cashier" class="w-full p-2 border rounded-lg">
                         </div>
                     </div>
 
-                    <!-- Gross Calculation Banner -->
-                    <div class="p-2.5 bg-slate-100 rounded-lg flex justify-between font-bold text-slate-800">
-                        <span>Calculated Gross Pay:</span>
-                        <span id="payroll-gross-display" class="text-emerald-700">₱6,943.75</span>
-                    </div>
-
-                    <!-- Statutory Deductions -->
-                    <div class="p-3 bg-amber-50/70 border border-amber-200 rounded-xl space-y-2">
-                        <span class="font-bold text-amber-900 block text-[11px] uppercase">Statutory Deductions (SSS, PhilHealth, Pag-IBIG)</span>
-                        <div class="grid grid-cols-4 gap-2">
-                            <div>
-                                <label class="block text-[10px] font-bold text-slate-600 mb-0.5">SSS (₱)</label>
-                                <input type="number" step="any" name="sss_deduction" value="400" class="w-full p-1.5 border rounded bg-white">
-                            </div>
-                            <div>
-                                <label class="block text-[10px] font-bold text-slate-600 mb-0.5">PhilHealth (₱)</label>
-                                <input type="number" step="any" name="philhealth_deduction" value="180" class="w-full p-1.5 border rounded bg-white">
-                            </div>
-                            <div>
-                                <label class="block text-[10px] font-bold text-slate-600 mb-0.5">Pag-IBIG (₱)</label>
-                                <input type="number" step="any" name="pagibig_deduction" value="100" class="w-full p-1.5 border rounded bg-white">
-                            </div>
-                            <div>
-                                <label class="block text-[10px] font-bold text-slate-600 mb-0.5">Other / Adv (₱)</label>
-                                <input type="number" step="any" name="other_deductions" value="0" class="w-full p-1.5 border rounded bg-white">
-                            </div>
+                    <!-- Month and Year Selection (Rubric 16a) -->
+                    <div class="grid grid-cols-2 gap-3">
+                        <div>
+                            <label class="block font-bold text-slate-700 mb-1">Payroll Month *</label>
+                            <select id="payroll-month" name="month" class="w-full p-2 border rounded-lg font-bold text-slate-800">
+                                ${['January','February','March','April','May','June','July','August','September','October','November','December'].map(m => '<option value="' + m + '" ' + (m === 'November' ? 'selected' : '') + '>' + m + '</option>').join('')}
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block font-bold text-slate-700 mb-1">Payroll Year *</label>
+                            <select id="payroll-year" name="year" class="w-full p-2 border rounded-lg font-bold text-slate-800">
+                                <option value="2024">2024</option>
+                                <option value="2025" selected>2025</option>
+                                <option value="2026">2026</option>
+                            </select>
                         </div>
                     </div>
 
-                    <!-- Net Pay Banner -->
-                    <div class="p-3 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center justify-between">
-                        <span class="font-bold text-emerald-900">Total Net Take-Home Pay:</span>
-                        <span id="payroll-net-display" class="font-black text-emerald-700 text-lg">₱6,263.75</span>
+                    <!-- Gross Pay & Rate Inputs -->
+                    <div class="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-2.5">
+                        <div class="flex items-center justify-between">
+                            <span class="font-bold text-slate-800 text-[11px] uppercase">Gross Salary Configuration</span>
+                            <span class="text-[10px] text-slate-500">Fixed Gross or Daily Rate Calculation</span>
+                        </div>
+                        <div class="grid grid-cols-1 sm:grid-cols-4 gap-2.5">
+                            <div class="sm:col-span-2">
+                                <label class="block text-[10px] font-bold text-slate-600 mb-0.5">Fixed Gross Pay (₱) *</label>
+                                <input type="number" step="any" id="payroll-gross-input" name="gross_pay" value="30000" class="w-full p-2 border rounded-lg font-bold text-emerald-800 bg-white">
+                            </div>
+                            <div>
+                                <label class="block text-[10px] font-bold text-slate-600 mb-0.5">Daily Rate (₱)</label>
+                                <input type="number" step="any" id="payroll-daily-rate" name="daily_rate" value="1000" class="w-full p-2 border rounded-lg bg-white">
+                            </div>
+                            <div>
+                                <label class="block text-[10px] font-bold text-slate-600 mb-0.5">Days Worked</label>
+                                <input type="number" step="any" id="payroll-days-worked" name="days_worked" value="30" class="w-full p-2 border rounded-lg bg-white">
+                            </div>
+                        </div>
+                        <div class="p-2 bg-white rounded-lg border flex justify-between font-bold text-slate-800">
+                            <span>Calculated Gross Pay:</span>
+                            <span id="payroll-gross-display" class="text-emerald-700 font-black text-sm">₱30,000.00</span>
+                        </div>
+                    </div>
+
+                    <!-- Statutory Deductions (Rubric 17a: SSS, Pag-IBIG, PhilHealth, Withholding Tax) -->
+                    <div class="p-3 bg-amber-50/80 border border-amber-200 rounded-xl space-y-2">
+                        <div class="flex items-center justify-between">
+                            <span class="font-bold text-amber-900 block text-[11px] uppercase">Deductions (SSS, Pag-IBIG, PhilHealth, Tax)</span>
+                            <span class="text-[10px] text-amber-700">Philippine Statutory Standards</span>
+                        </div>
+                        <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                            <div>
+                                <label class="block text-[10px] font-bold text-slate-700 mb-0.5">SSS (₱) *</label>
+                                <input type="number" step="any" id="payroll-sss" name="sss_deduction" value="1200" required class="w-full p-1.5 border rounded bg-white font-bold">
+                            </div>
+                            <div>
+                                <label class="block text-[10px] font-bold text-slate-700 mb-0.5">Pag-IBIG (₱) *</label>
+                                <input type="number" step="any" id="payroll-pagibig" name="pagibig_deduction" value="200" required class="w-full p-1.5 border rounded bg-white font-bold">
+                            </div>
+                            <div>
+                                <label class="block text-[10px] font-bold text-slate-700 mb-0.5">PhilHealth (₱) *</label>
+                                <input type="number" step="any" id="payroll-philhealth" name="philhealth_deduction" value="400" required class="w-full p-1.5 border rounded bg-white font-bold">
+                            </div>
+                            <div>
+                                <label class="block text-[10px] font-bold text-slate-700 mb-0.5">Withholding Tax (₱) *</label>
+                                <input type="number" step="any" id="payroll-tax" name="tax_deduction" value="2000" required class="w-full p-1.5 border rounded bg-white font-bold">
+                            </div>
+                        </div>
+                        <input type="hidden" name="overtime_hours" value="0">
+                        <input type="hidden" name="other_deductions" value="0">
+
+                        <!-- Total Deductions Display (Rubric 17b: ₱3,800.00) -->
+                        <div class="p-2 bg-white rounded-lg border border-amber-200 flex justify-between font-bold text-amber-900">
+                            <span>Total Deductions (SSS + Pag-IBIG + PhilHealth + Tax):</span>
+                            <span id="payroll-deductions-display" class="font-black text-amber-700 text-sm">₱3,800.00</span>
+                        </div>
+                    </div>
+
+                    <!-- Net Pay Banner (Rubric 18a & 18b: ₱26,200.00) -->
+                    <div class="p-3.5 bg-emerald-50 border border-emerald-300 rounded-xl flex items-center justify-between">
+                        <div>
+                            <span class="font-extrabold text-emerald-950 block text-xs">Total Net Pay (Gross - Deductions):</span>
+                            <span class="text-[10px] text-emerald-700">₱30,000.00 - ₱3,800.00 = ₱26,200.00</span>
+                        </div>
+                        <span id="payroll-net-display" class="font-black text-emerald-700 text-xl">₱26,200.00</span>
                     </div>
 
                     <div class="pt-3 border-t flex space-x-2">
@@ -6261,20 +6656,42 @@ const app = {
         this.recalcPayrollModal(document.getElementById('payroll-form'));
     },
 
+    fillJuanDelaCruzPayroll() {
+        const f = document.getElementById('payroll-form') || document.getElementById('edit-payroll-form');
+        if (!f) return;
+        if (f.name) f.name.value = 'Juan Dela Cruz';
+        if (f.role) f.role.value = 'Senior Cashier & Sales Specialist';
+        if (f.month) f.month.value = 'November';
+        if (f.year) f.year.value = '2025';
+        if (f.gross_pay) f.gross_pay.value = '30000';
+        if (f.daily_rate) f.daily_rate.value = '1000';
+        if (f.days_worked) f.days_worked.value = '30';
+        if (f.sss_deduction) f.sss_deduction.value = '1200';
+        if (f.pagibig_deduction) f.pagibig_deduction.value = '200';
+        if (f.philhealth_deduction) f.philhealth_deduction.value = '400';
+        if (f.tax_deduction) f.tax_deduction.value = '2000';
+        this.recalcPayrollModal(f);
+    },
+
     recalcPayrollModal(form) {
         if (!form) return;
+        const grossInp = form.gross_pay ? form.gross_pay.value : '';
         const res = store.calculatePayrollValues(
-            form.daily_rate.value,
-            form.days_worked.value,
-            form.overtime_hours.value,
-            form.sss_deduction.value,
-            form.philhealth_deduction.value,
-            form.pagibig_deduction.value,
-            form.other_deductions.value
+            form.daily_rate ? form.daily_rate.value : 0,
+            form.days_worked ? form.days_worked.value : 0,
+            form.overtime_hours ? form.overtime_hours.value : 0,
+            form.sss_deduction ? form.sss_deduction.value : 0,
+            form.philhealth_deduction ? form.philhealth_deduction.value : 0,
+            form.pagibig_deduction ? form.pagibig_deduction.value : 0,
+            form.tax_deduction ? form.tax_deduction.value : 0,
+            form.other_deductions ? form.other_deductions.value : 0,
+            grossInp
         );
         const grossEl = document.getElementById('payroll-gross-display');
+        const dedEl = document.getElementById('payroll-deductions-display');
         const netEl = document.getElementById('payroll-net-display');
         if (grossEl) grossEl.textContent = `₱${res.grossPay.toFixed(2)}`;
+        if (dedEl) dedEl.textContent = `₱${res.totalDeductions.toFixed(2)}`;
         if (netEl) netEl.textContent = `₱${res.netPay.toFixed(2)}`;
     },
 
@@ -6284,13 +6701,17 @@ const app = {
         const payload = {
             name: f.name.value,
             role: f.role.value,
-            daily_rate: f.daily_rate.value,
-            days_worked: f.days_worked.value,
-            overtime_hours: f.overtime_hours.value,
-            sss_deduction: f.sss_deduction.value,
-            philhealth_deduction: f.philhealth_deduction.value,
-            pagibig_deduction: f.pagibig_deduction.value,
-            other_deductions: f.other_deductions.value
+            month: f.month ? f.month.value : 'November',
+            year: f.year ? f.year.value : '2025',
+            gross_pay: f.gross_pay ? f.gross_pay.value : 0,
+            daily_rate: f.daily_rate ? f.daily_rate.value : 0,
+            days_worked: f.days_worked ? f.days_worked.value : 0,
+            overtime_hours: f.overtime_hours ? f.overtime_hours.value : 0,
+            sss_deduction: f.sss_deduction ? f.sss_deduction.value : 0,
+            philhealth_deduction: f.philhealth_deduction ? f.philhealth_deduction.value : 0,
+            pagibig_deduction: f.pagibig_deduction ? f.pagibig_deduction.value : 0,
+            tax_deduction: f.tax_deduction ? f.tax_deduction.value : 0,
+            other_deductions: f.other_deductions ? f.other_deductions.value : 0
         };
         store.addOrUpdateEmployee(payload);
         this.closeModal('payroll-calc-modal');
@@ -6394,6 +6815,10 @@ const app = {
 document.addEventListener('DOMContentLoaded', () => {
     app.init();
 });
+
+if (typeof module !== 'undefined') {
+    module.exports = { app };
+}
 
     </script>
 </body>
